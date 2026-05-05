@@ -1,7 +1,4 @@
-//! TTS client for kiki-tts-server (OpenAI-compatible endpoint)
-//!
-//! Sends text to the local kiki-tts-server at localhost:8080
-//! and returns WAV audio bytes for playback via rodio.
+//! TTS client for local KittenTTS FastAPI backend (OpenAI-compatible endpoint).
 
 use anyhow::{Context, Result};
 use std::io::Read;
@@ -13,7 +10,7 @@ const TTS_HEALTH_ENDPOINT: &str = "http://127.0.0.1:8005/health/ready";
 const TTS_LOG_FILE: &str = r"D:\yyscode\MusicAgent\gpui-widget\musicagent-tts.log";
 static TTS_WARNED_UNHEALTHY: AtomicBool = AtomicBool::new(false);
 
-/// Available kiki-tts voices
+/// Available KittenTTS voices
 pub const VOICES: &[&str] = &[
     "Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo",
 ];
@@ -31,7 +28,18 @@ fn append_tts_log(line: &str) {
     }
 }
 
+fn force_local_no_proxy() {
+    // Prevent local loopback calls from being routed through corporate/system proxies.
+    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+    std::env::set_var("no_proxy", "127.0.0.1,localhost");
+    std::env::remove_var("HTTP_PROXY");
+    std::env::remove_var("HTTPS_PROXY");
+    std::env::remove_var("http_proxy");
+    std::env::remove_var("https_proxy");
+}
+
 fn is_server_healthy() -> bool {
+    force_local_no_proxy();
     match ureq::get(TTS_HEALTH_ENDPOINT)
         .header("Connection", "close")
         .call()
@@ -59,8 +67,10 @@ pub async fn text_to_speech(text: &str, voice: &str) -> Result<Vec<u8>> {
     let voice = voice.to_string();
 
     smol::unblock(move || -> Result<Vec<u8>> {
+        force_local_no_proxy();
         let body = serde_json::json!({
-            "model": "kitten-tts-mini",
+            // FastAPI backend validates OpenAI-compatible model IDs.
+            "model": "tts-1",
             "input": text,
             "voice": voice,
             "response_format": "wav",
@@ -92,6 +102,11 @@ pub async fn text_to_speech(text: &str, voice: &str) -> Result<Vec<u8>> {
                         .as_reader()
                         .read_to_end(&mut audio_bytes)
                         .context("Failed to read TTS response")?;
+                    append_tts_log(&format!(
+                        "tts send success attempt={} bytes={}",
+                        attempt,
+                        audio_bytes.len()
+                    ));
 
                     if audio_bytes.len() < 1024 {
                         append_tts_log(&format!("tts response too small: {} bytes", audio_bytes.len()));
@@ -99,10 +114,15 @@ pub async fn text_to_speech(text: &str, voice: &str) -> Result<Vec<u8>> {
                     return Ok(audio_bytes);
                 }
                 Err(e) => {
+                    let err_detail = match &e {
+                        ureq::Error::StatusCode(code) => format!(" status={}", code),
+                        _ => String::new(),
+                    };
                     append_tts_log(&format!(
-                        "tts send failed attempt={} err={} body_len={}",
+                        "tts send failed attempt={} err={}{} body_len={}",
                         attempt,
                         e,
+                        err_detail,
                         json_body.len()
                     ));
                     last_err = Some(anyhow::anyhow!("Failed to send TTS request: {}", e));
