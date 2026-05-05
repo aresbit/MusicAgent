@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=AutoAgent
+Comment=AI-powered coding agent desktop
+Exec=/usr/bin/autoagent
+Icon=autoagent
+Terminal=false
+Type=Application
+StartupWMClass=autoagent
+Categories=Development;IDE;
+Keywords=AI;agent;code;LLM;Claude;
