@@ -5,6 +5,8 @@ set "ROOT=D:\yyscode\MusicAgent"
 set "BACKEND_DIR=D:\yysdl\KittenTTS-FastAPI"
 set "BACKEND_LOG=%ROOT%\gpui-widget\tts-fastapi.log"
 set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+set "KITTEN_TTS_DEVICE=cuda"
+if "%KITTEN_MODEL_REPO_ID%"=="" set "KITTEN_MODEL_REPO_ID=KittenML/kitten-tts-nano-0.8-fp32"
 
 echo [1/5] Stop existing TTS backends...
 taskkill /F /IM kitten-tts-server.exe >nul 2>nul
@@ -24,11 +26,15 @@ if errorlevel 1 (
   echo ERROR: uv sync failed in %BACKEND_DIR%
   exit /b 1
 )
+echo [3.5/5] Check ONNX providers...
+uv run python -c "import onnxruntime as ort; print('ONNX providers:', ort.get_available_providers())"
 
 echo [4/5] Start FastAPI TTS backend...
 echo.>>"%BACKEND_LOG%"
 echo ===== START %DATE% %TIME% =====>>"%BACKEND_LOG%"
-start "" /B cmd /c "cd /d %BACKEND_DIR% && uv run src/server.py" 1>>"%BACKEND_LOG%" 2>&1
+echo KITTEN_TTS_DEVICE=%KITTEN_TTS_DEVICE%>>"%BACKEND_LOG%"
+echo KITTEN_MODEL_REPO_ID=%KITTEN_MODEL_REPO_ID%>>"%BACKEND_LOG%"
+start "" /B cmd /c "cd /d %BACKEND_DIR% && set KITTEN_TTS_DEVICE=%KITTEN_TTS_DEVICE% && set KITTEN_MODEL_REPO_ID=%KITTEN_MODEL_REPO_ID% && uv run src/server.py" 1>>"%BACKEND_LOG%" 2>&1
 
 echo [5/5] Wait for FastAPI readiness...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ok=$false; $max=240; for($i=0;$i -lt $max;$i++){ try { $r=Invoke-WebRequest -Uri 'http://127.0.0.1:8005/health/ready' -UseBasicParsing -TimeoutSec 1; if($r.StatusCode -eq 200){$ok=$true; break} } catch {}; if((($i -band 7) -eq 0)){ Write-Host ('  waiting... ' + [int]($i/4) + 's') }; Start-Sleep -Milliseconds 250 }; if(-not $ok){ exit 1 }"

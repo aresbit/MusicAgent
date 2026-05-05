@@ -8,6 +8,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 use chrono::Local;
 use std::fs::OpenOptions;
+use std::time::Instant;
 use std::time::Duration;
 
 mod audio;
@@ -15,6 +16,7 @@ mod cli_client;
 mod tts_client;
 
 const APP_FLOW_LOG_FILE: &str = r"D:\yyscode\MusicAgent\gpui-widget\musicagent-flow.log";
+const DEFAULT_TTS_VOICE: &str = "Luna";
 
 fn append_flow_log(line: &str) {
     let ts = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
@@ -111,6 +113,7 @@ struct MusicAgentApp {
     current_turn_index: usize,
     current_word_index: usize,
     highlight_active: bool,
+    waveform_bars: Vec<f32>,
     is_asking: bool,
     fluid_hue: f32, // 0.0-360.0 hue for animated gradient background
     clear_input: bool,
@@ -169,7 +172,7 @@ impl MusicAgentApp {
                         line_idx + 1,
                         attempt
                     ));
-                    match tts_client::text_to_speech(line, "Bella").await {
+                    match tts_client::text_to_speech(line, DEFAULT_TTS_VOICE).await {
                         Ok(wav) => {
                             append_flow_log(&format!(
                                 "startup intro line={} tts bytes={}",
@@ -214,6 +217,7 @@ impl MusicAgentApp {
             current_turn_index: 0,
             current_word_index: 0,
             highlight_active: false,
+            waveform_bars: vec![0.08; 60],
             is_asking: false,
             fluid_hue: 0.0,
             clear_input: false,
@@ -277,13 +281,13 @@ impl MusicAgentApp {
                 append_flow_log(&format!("tts request start words={}", word_count));
 
                 // Always hook reply -> TTS, even if view temporarily unavailable.
-                match tts_client::text_to_speech(&tts_text, "Bella").await {
+                match tts_client::text_to_speech(&tts_text, DEFAULT_TTS_VOICE).await {
                     Ok(wav) => {
                         append_flow_log(&format!("tts response bytes={}", wav.len()));
                         let total_ms = audio::estimate_wav_duration_ms(&wav)
                             .unwrap_or((word_count as u64) * 420);
-                        let step_ms = (total_ms / word_count as u64).max(120);
-                        append_flow_log(&format!("tts duration_ms={} step_ms={}", total_ms, step_ms));
+                        append_flow_log(&format!("tts duration_ms={} words={}", total_ms, word_count));
+                        let fft_anim = audio::build_fft_animation(&wav, 60);
 
                         if let Some(v) = this.upgrade() {
                             v.update(&mut cx.clone(), |this, cx| {
@@ -302,24 +306,40 @@ impl MusicAgentApp {
                             done_for_player.store(true, std::sync::atomic::Ordering::SeqCst);
                         }).detach();
 
-                        let mut idx = 0usize;
+                        let started = Instant::now();
                         while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                            let elapsed_ms = started.elapsed().as_millis() as u64;
+                            let ratio = if total_ms == 0 {
+                                0.0
+                            } else {
+                                (elapsed_ms as f32 / total_ms as f32).clamp(0.0, 1.0)
+                            };
+                            let idx = ((ratio * word_count as f32).floor() as usize)
+                                .min(word_count.saturating_sub(1));
+                            let bars = fft_anim.as_ref().map(|anim| {
+                                let fi = anim.frame_interval_ms.max(1);
+                                let frame_idx = ((elapsed_ms / fi) as usize).min(anim.frames.len().saturating_sub(1));
+                                anim.frames[frame_idx].clone()
+                            });
                             if let Some(v) = this.upgrade() {
                                 v.update(&mut cx.clone(), |this, cx| {
                                     this.current_turn_index = turn_idx;
                                     this.current_word_index = idx.min(word_count.saturating_sub(1));
                                     this.highlight_active = true;
+                                    if let Some(b) = &bars {
+                                        this.waveform_bars = b.clone();
+                                    }
                                     cx.notify();
                                 }).ok();
                             }
-                            idx = idx.saturating_add(1);
-                            smol::Timer::after(std::time::Duration::from_millis(step_ms)).await;
+                            smol::Timer::after(std::time::Duration::from_millis(80)).await;
                         }
 
                         if let Some(v) = this.upgrade() {
                             v.update(&mut cx.clone(), |this, cx| {
                                 this.status = "Idle".into();
                                 this.highlight_active = false;
+                                this.waveform_bars = vec![0.08; 60];
                                 cx.notify();
                             }).ok();
                         }
@@ -537,10 +557,8 @@ impl MusicAgentApp {
     fn render_wave_bars(&self, count: usize) -> impl IntoElement {
         let mut row = div().flex().items_end().gap(px(1.0)).w_full();
         for i in 0..count {
-            let n1 = (i as f64 * 0.6).sin() * 0.5 + 0.5;
-            let n2 = (i as f64 * 0.23 + 1.3).sin() * 0.5 + 0.5;
-            let env = 0.5 + 0.5 * ((i as f64 / count as f64) * std::f64::consts::PI).sin();
-            let h = 4.0 + (n1 * 0.6 + n2 * 0.4) * env * 60.0;
+            let a = self.waveform_bars.get(i).copied().unwrap_or(0.08).clamp(0.0, 1.0);
+            let h = 6.0 + a * 62.0;
             row = row.child(
                 div()
                     .w(px(3.0))
@@ -776,10 +794,9 @@ impl MusicAgentApp {
     fn render_player_bars(&self) -> impl IntoElement {
         let mut container = div().flex().flex_1().items_center().gap(px(2.0));
         for i in 0..56 {
-            let n1 = (i as f64 * 0.6).sin() * 0.5 + 0.5;
-            let n2 = (i as f64 * 0.23 + 1.3).sin() * 0.5 + 0.5;
-            let env = 0.5 + 0.5 * ((i as f64 / 56.0) * std::f64::consts::PI).sin();
-            let h = 6.0 + (n1 * 0.6 + n2 * 0.4) * env * 18.0;
+            let src = i * 60 / 56;
+            let a = self.waveform_bars.get(src).copied().unwrap_or(0.08).clamp(0.0, 1.0);
+            let h = 6.0 + a * 18.0;
             container = container.child(
                 div()
                     .flex_1()

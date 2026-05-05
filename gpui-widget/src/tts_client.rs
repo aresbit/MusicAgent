@@ -5,7 +5,7 @@ use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-const TTS_ENDPOINT: &str = "http://127.0.0.1:8005/v1/audio/speech";
+const TTS_ENDPOINT: &str = "http://127.0.0.1:8005/tts";
 const TTS_HEALTH_ENDPOINT: &str = "http://127.0.0.1:8005/health/ready";
 const TTS_LOG_FILE: &str = r"D:\yyscode\MusicAgent\gpui-widget\musicagent-tts.log";
 static TTS_WARNED_UNHEALTHY: AtomicBool = AtomicBool::new(false);
@@ -69,11 +69,19 @@ pub async fn text_to_speech(text: &str, voice: &str) -> Result<Vec<u8>> {
     smol::unblock(move || -> Result<Vec<u8>> {
         force_local_no_proxy();
         let body = serde_json::json!({
-            // FastAPI backend validates OpenAI-compatible model IDs.
-            "model": "tts-1",
-            "input": text,
+            "text": text,
             "voice": voice,
-            "response_format": "wav",
+            "output_format": "wav",
+            "split_text": true,
+            "chunk_size": 160,
+            "speed": 0.94,
+            "text_options": {
+                "profile": "narration",
+                "normalize_pause_punctuation": true,
+                "pause_strength": "medium",
+                "normalize_markdown": true,
+                "strip_non_speakable_symbols": true
+            }
         });
         let json_body = serde_json::to_string(&body)
             .context("Failed to serialize TTS request")?;

@@ -134,3 +134,82 @@ pub fn start_ambient() {
 pub fn stop_ambient() {
     PLAYING.store(false, Ordering::SeqCst);
 }
+
+pub struct FftAnimation {
+    pub frame_interval_ms: u64,
+    pub frames: Vec<Vec<f32>>,
+}
+
+pub fn build_fft_animation(wav_bytes: &[u8], bars: usize) -> Option<FftAnimation> {
+    if bars == 0 {
+        return None;
+    }
+    let mut reader = hound::WavReader::new(Cursor::new(wav_bytes)).ok()?;
+    let spec = reader.spec();
+    if spec.sample_rate == 0 {
+        return None;
+    }
+
+    let channels = spec.channels.max(1) as usize;
+    let mut mono = Vec::<f32>::new();
+    let mut acc = 0.0f32;
+    let mut ch = 0usize;
+    for s in reader.samples::<i16>() {
+        let v = s.ok()? as f32 / i16::MAX as f32;
+        acc += v;
+        ch += 1;
+        if ch == channels {
+            mono.push(acc / channels as f32);
+            acc = 0.0;
+            ch = 0;
+        }
+    }
+    if mono.len() < 2048 {
+        return None;
+    }
+
+    let fft_size = 1024usize;
+    let hop_size = ((spec.sample_rate as f32) * 0.05).max(256.0) as usize; // ~20 fps
+    let frame_interval_ms = ((hop_size as f64) * 1000.0 / spec.sample_rate as f64) as u64;
+    let usable_bins = fft_size / 2;
+
+    let mut frames = Vec::new();
+    let mut pos = 0usize;
+    while pos + fft_size <= mono.len() {
+        let mut windowed = vec![0.0f32; fft_size];
+        for i in 0..fft_size {
+            // Hann window
+            let w = 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (fft_size as f32)).cos();
+            windowed[i] = mono[pos + i] * w;
+        }
+
+        let mut bars_out = vec![0.0f32; bars];
+        for (bi, out) in bars_out.iter_mut().enumerate() {
+            let start = bi * usable_bins / bars;
+            let end = ((bi + 1) * usable_bins / bars).max(start + 1);
+            let k = (start + end) / 2;
+            let mut re = 0.0f32;
+            let mut im = 0.0f32;
+            let twopi_k = 2.0 * std::f32::consts::PI * (k as f32) / (fft_size as f32);
+            for (n, x) in windowed.iter().enumerate() {
+                let a = twopi_k * (n as f32);
+                re += *x * a.cos();
+                im -= *x * a.sin();
+            }
+            let avg = re * re + im * im;
+            // Compress dynamic range to 0..1-like value
+            *out = (avg.sqrt() * 6.0).clamp(0.0, 1.0);
+        }
+        frames.push(bars_out);
+        pos += hop_size;
+    }
+
+    if frames.is_empty() {
+        None
+    } else {
+        Some(FftAnimation {
+            frame_interval_ms: frame_interval_ms.max(20),
+            frames,
+        })
+    }
+}
