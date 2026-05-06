@@ -3,70 +3,23 @@
 ## Session: 2026-05-06
 
 ### Current Status
-- **Phase:** 2 — Architecture & Planning
+- **Phase:** 1 — MP3 搜索下载播放功能
 - **Started:** 2026-05-06
+- **Status:** 核心功能已完成，等待整链验证
 
 ### Actions Taken
-- 使用 se-tool 初始化项目规划
-- 设计多音频源架构 (Source Abstraction Layer)
-- 设计 AudioManager 统一调度
-- 调研 7 种音频源的集成方案
-- 定义 AI Control Protocol (opencc Tools → 播放控制)
+- 重新设计功能方向：从多音频源架构 → **聚焦 MP3 搜索下载播放**
+- 选定 yt-dlp 作为搜索源（免费、稳定、中文覆盖全）
 - 完成 task_plan.md 和 findings.md
+- 用 se-tool 初始化规划
+- 创建 `music_player.rs`（yt-dlp 搜索 + 下载编排）
+- 扩展 `audio.rs:play_mp3_file_blocking()`
+- Cargo.toml 启用 rodio mp3 feature + walkdir
+- main.rs 集成 "播放"/"放"/"play" 命令检测 → 调用 search_and_play
+- 解决 yt-dlp 403 问题：添加 `--extractor-args youtube:player_client=android`
+- 验证 yt-dlp 搜索和下载均正常工作
 
-### Implementation Priority
-| Priority | Source | Effort | Dependencies |
-|:--------:|--------|--------|:------------:|
-| P0 | TTS (kiki) | 已有 | 修复 espeak-ng |
-| P0 | Local MP3 | 低 | — |
-| P1 | Online Radio | 低 | streaming crate |
-| P1 | NetEase | 中 | NeteaseCloudMusicApi |
-| P2 | Spotify | 高 | OAuth + librespot |
-| P2 | YouTube | 中 | yt-dlp |
-| P2 | Bilibili | 中 | bilibili-api |
-
-### Architecture Diagram
-```
-┌──────────────────────────────────────────────────────┐
-│                    GPUI Widget UI                      │
-│  ┌──────────────────┐  ┌──────────────────────────┐  │
-│  │  Chat Panel       │  │  Player Controls          │  │
-│  │  (opencc Stream)  │  │  ▶⏸⏭  Volume  Source    │  │
-│  └────────┬─────────┘  └───────────┬──────────────┘  │
-│           │                        │                  │
-│           ▼                        ▼                  │
-│  ┌───────────────────────────────────────────────┐   │
-│  │              AudioManager                      │   │
-│  │  ┌──────────┐ ┌──────────┐ ┌────────────────┐ │   │
-│  │  │ TTS      │ │ Ambient  │ │ Music Playback  │ │   │
-│  │  │ Playback │ │ Hum      │ │ (Queue + Mix)   │ │   │
-│  │  └──────────┘ └──────────┘ └────────────────┘ │   │
-│  └───────────────────┬───────────────────────────┘   │
-│                      │                               │
-│                      ▼                               │
-│  ┌───────────────────────────────────────────────┐   │
-│  │          Source Abstraction Layer              │   │
-│  │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ │   │
-│  │  │ Radio  │ │ NetEase│ │ Spotify│ │ YT/Bili│ │   │
-│  │  │ Stream │ │ API    │ │ API    │ │ Extract│ │   │
-│  │  └────────┘ └────────┘ └────────┘ └────────┘ │   │
-│  │  ┌────────┐ ┌────────┐ ┌────────────────────┐ │   │
-│  │  │ Local  │ │ TTS    │ │ AI Control Channel │ │   │
-│  │  │ MP3    │ │ Server │ │ (opencc Commands)   │ │   │
-│  │  └────────┘ └────────┘ └────────────────────┘ │   │
-│  └───────────────────┬───────────────────────────┘   │
-│                      │                               │
-└──────────────────────┼───────────────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────────────┐
-│              opencc CLI (AI Engine)                    │
-│  ┌──────────────────────────────────────────────────┐ │
-│  │  Music Agent Prompt + Tool Definitions             │ │
-│  │  - play_radio(station)     - play_netease(song)  │ │
-│  │  - play_spotify(track)     - play_youtube(url)   │ │
-│  │  - play_bilibili(url)      - play_local(file)    │ │
-│  │  - search_music(query, source)                    │ │
-│  └──────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────┘
-```
+### Next Steps
+1. 编译运行项目，测试输入 "播放周杰伦七里香" 完整链路
+2. 验证 MP3 播放正常（需确保 TTS 服务在 8005 端口运行）
+3. 如需进一步 UI 增强（封面、进度条等）进入 Phase 2

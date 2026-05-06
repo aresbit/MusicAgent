@@ -1,15 +1,18 @@
 //! Audio playback for MusicAgent FM
 //!
 //! Two modes:
-//! 1. **Ambient** — low sine wave hum when the widget is "idle"
-//! 2. **TTS** — plays WAV audio from the kiki-tts-server when AI responds
+//! 1. Ambient: low sine wave hum.
+//! 2. Music/TTS: WAV or MP3 playback.
 
 use rodio::{Decoder, OutputStream, Sink, Source};
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-static PLAYING: AtomicBool = AtomicBool::new(false);
+static AMBIENT_PLAYING: AtomicBool = AtomicBool::new(false);
+static MUSIC_PLAYING: AtomicBool = AtomicBool::new(false);
+static STOP_MUSIC_REQUESTED: AtomicBool = AtomicBool::new(false);
+
 const AUDIO_LOG_FILE: &str = r"D:\yyscode\MusicAgent\gpui-widget\musicagent-audio.log";
 
 fn append_audio_log(line: &str) {
@@ -26,15 +29,22 @@ fn append_audio_log(line: &str) {
 }
 
 pub fn set_playing(on: bool) {
-    PLAYING.store(on, Ordering::SeqCst);
+    MUSIC_PLAYING.store(on, Ordering::SeqCst);
 }
 
 pub fn is_playing() -> bool {
-    PLAYING.load(Ordering::SeqCst)
+    MUSIC_PLAYING.load(Ordering::SeqCst) || AMBIENT_PLAYING.load(Ordering::SeqCst)
+}
+
+pub fn is_music_playing() -> bool {
+    MUSIC_PLAYING.load(Ordering::SeqCst)
+}
+
+pub fn stop_music() {
+    STOP_MUSIC_REQUESTED.store(true, Ordering::SeqCst);
 }
 
 /// Play TTS audio from WAV bytes.
-/// Spawns a new thread with its own audio stream — no global state needed.
 pub fn play_tts(wav_bytes: Vec<u8>) {
     std::thread::spawn(move || {
         play_tts_blocking(wav_bytes);
@@ -70,6 +80,61 @@ pub fn play_tts_blocking(wav_bytes: Vec<u8>) -> bool {
     false
 }
 
+/// Play an MP3 file and block until playback ends or stop is requested.
+pub fn play_mp3_file_blocking(path: &std::path::Path) -> bool {
+    append_audio_log(&format!("play_mp3_file_blocking path={}", path.display()));
+    STOP_MUSIC_REQUESTED.store(false, Ordering::SeqCst);
+    MUSIC_PLAYING.store(true, Ordering::SeqCst);
+
+    let (_stream, stream_handle) = match OutputStream::try_default() {
+        Ok(s) => s,
+        Err(e) => {
+            append_audio_log(&format!("OutputStream::try_default failed: {}", e));
+            MUSIC_PLAYING.store(false, Ordering::SeqCst);
+            return false;
+        }
+    };
+    let sink = match Sink::try_new(&stream_handle) {
+        Ok(s) => s,
+        Err(e) => {
+            append_audio_log(&format!("Sink::try_new failed: {}", e));
+            MUSIC_PLAYING.store(false, Ordering::SeqCst);
+            return false;
+        }
+    };
+
+    let ok = match std::fs::File::open(path) {
+        Ok(file) => match Decoder::new(file) {
+            Ok(source) => {
+                sink.append(source);
+                sink.play();
+                while !sink.empty() {
+                    if STOP_MUSIC_REQUESTED.load(Ordering::SeqCst) {
+                        append_audio_log("play_mp3_file_blocking stop requested");
+                        sink.stop();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(80));
+                }
+                true
+            }
+            Err(e) => {
+                append_audio_log(&format!("Decoder::new from file failed: {}", e));
+                false
+            }
+        },
+        Err(e) => {
+            append_audio_log(&format!("File::open failed: {}", e));
+            false
+        }
+    };
+
+    MUSIC_PLAYING.store(false, Ordering::SeqCst);
+    STOP_MUSIC_REQUESTED.store(false, Ordering::SeqCst);
+    append_audio_log("play_mp3_file_blocking done");
+    ok
+}
+
 /// Estimate WAV duration in milliseconds for rough word-highlighting sync.
 pub fn estimate_wav_duration_ms(wav_bytes: &[u8]) -> Option<u64> {
     if wav_bytes.len() < 44 {
@@ -86,27 +151,21 @@ pub fn estimate_wav_duration_ms(wav_bytes: &[u8]) -> Option<u64> {
     Some(((data_len as u64) * 1000) / (byte_rate as u64))
 }
 
-/// Check if TTS is currently playing (rough check via any active OutputStream)
 pub fn is_tts_playing() -> bool {
-    // Rough heuristic: if we have an active audio thread, it's playing
     false
 }
 
-// ─── Ambient mode ──────────────────────────────────────────────────────
-
-/// Spawn a background thread that plays a gentle ambient sine tone.
 pub fn start_ambient() {
-    if PLAYING.load(Ordering::SeqCst) {
+    if AMBIENT_PLAYING.load(Ordering::SeqCst) {
         return;
     }
-    PLAYING.store(true, Ordering::SeqCst);
+    AMBIENT_PLAYING.store(true, Ordering::SeqCst);
     std::thread::spawn(|| {
         use rodio::source::SineWave;
-        use rodio::{OutputStream, Sink};
         let (_stream, stream_handle) = match OutputStream::try_default() {
             Ok(s) => s,
             Err(_) => {
-                PLAYING.store(false, Ordering::SeqCst);
+                AMBIENT_PLAYING.store(false, Ordering::SeqCst);
                 return;
             }
         };
@@ -114,7 +173,7 @@ pub fn start_ambient() {
         let sink = match Sink::try_new(&stream_handle) {
             Ok(s) => s,
             Err(_) => {
-                PLAYING.store(false, Ordering::SeqCst);
+                AMBIENT_PLAYING.store(false, Ordering::SeqCst);
                 return;
             }
         };
@@ -123,7 +182,7 @@ pub fn start_ambient() {
         sink.append(source);
         sink.play();
 
-        while PLAYING.load(Ordering::SeqCst) {
+        while AMBIENT_PLAYING.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(200));
         }
 
@@ -132,7 +191,7 @@ pub fn start_ambient() {
 }
 
 pub fn stop_ambient() {
-    PLAYING.store(false, Ordering::SeqCst);
+    AMBIENT_PLAYING.store(false, Ordering::SeqCst);
 }
 
 pub struct FftAnimation {
@@ -169,7 +228,7 @@ pub fn build_fft_animation(wav_bytes: &[u8], bars: usize) -> Option<FftAnimation
     }
 
     let fft_size = 1024usize;
-    let hop_size = ((spec.sample_rate as f32) * 0.05).max(256.0) as usize; // ~20 fps
+    let hop_size = ((spec.sample_rate as f32) * 0.05).max(256.0) as usize;
     let frame_interval_ms = ((hop_size as f64) * 1000.0 / spec.sample_rate as f64) as u64;
     let usable_bins = fft_size / 2;
 
@@ -178,7 +237,6 @@ pub fn build_fft_animation(wav_bytes: &[u8], bars: usize) -> Option<FftAnimation
     while pos + fft_size <= mono.len() {
         let mut windowed = vec![0.0f32; fft_size];
         for i in 0..fft_size {
-            // Hann window
             let w = 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (fft_size as f32)).cos();
             windowed[i] = mono[pos + i] * w;
         }
@@ -197,7 +255,6 @@ pub fn build_fft_animation(wav_bytes: &[u8], bars: usize) -> Option<FftAnimation
                 im -= *x * a.sin();
             }
             let avg = re * re + im * im;
-            // Compress dynamic range to 0..1-like value
             *out = (avg.sqrt() * 6.0).clamp(0.0, 1.0);
         }
         frames.push(bars_out);

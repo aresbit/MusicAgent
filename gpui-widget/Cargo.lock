@@ -3598,6 +3598,7 @@ dependencies = [
  "smol",
  "tokio",
  "ureq",
+ "walkdir",
 ]
 
 [[package]]
