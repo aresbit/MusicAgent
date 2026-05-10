@@ -13,15 +13,13 @@ static AMBIENT_PLAYING: AtomicBool = AtomicBool::new(false);
 static MUSIC_PLAYING: AtomicBool = AtomicBool::new(false);
 static STOP_MUSIC_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-const AUDIO_LOG_FILE: &str = r"D:\yyscode\MusicAgent\gpui-widget\musicagent-audio.log";
-
 fn append_audio_log(line: &str) {
     let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let msg = format!("[{}] {}\n", ts, line);
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(AUDIO_LOG_FILE)
+        .open(crate::paths::log_file("audio"))
     {
         use std::io::Write;
         let _ = f.write_all(msg.as_bytes());

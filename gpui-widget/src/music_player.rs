@@ -7,16 +7,13 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const MUSIC_CACHE_DIR: &str = r"D:\yyscode\MusicAgent\gpui-widget\music_cache";
-const MUSIC_LOG_FILE: &str = r"D:\yyscode\MusicAgent\gpui-widget\musicagent-music.log";
-
 fn append_music_log(line: &str) {
     let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let msg = format!("[{}] {}\n", ts, line);
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(MUSIC_LOG_FILE)
+        .open(crate::paths::log_file("music"))
     {
         use std::io::Write;
         let _ = f.write_all(msg.as_bytes());
@@ -202,7 +199,7 @@ pub async fn search_and_play(query: &str) -> Result<String> {
     ));
 
     // 2. 下载
-    let cache_dir = PathBuf::from(MUSIC_CACHE_DIR);
+    let cache_dir = crate::paths::music_cache_dir();
     let file_path = download_audio(&first.url, &cache_dir).await?;
 
     // 3. 播放（异步，后台播放）

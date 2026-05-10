@@ -7,7 +7,7 @@ use std::time::Duration;
 
 const TTS_ENDPOINT: &str = "http://127.0.0.1:8005/tts";
 const TTS_HEALTH_ENDPOINT: &str = "http://127.0.0.1:8005/health/ready";
-const TTS_LOG_FILE: &str = r"D:\yyscode\MusicAgent\gpui-widget\musicagent-tts.log";
+// Paths resolved via crate::paths module
 static TTS_WARNED_UNHEALTHY: AtomicBool = AtomicBool::new(false);
 
 /// Available KittenTTS voices
@@ -21,7 +21,7 @@ fn append_tts_log(line: &str) {
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(TTS_LOG_FILE)
+        .open(crate::paths::log_file("tts"))
     {
         use std::io::Write;
         let _ = f.write_all(msg.as_bytes());

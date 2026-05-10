@@ -14,3 +14,6 @@ coverage
 vendor/
 .tmp-pillow/
 gpui-widget/target/
+gpui-widget/music_cache/
+release/
+MusicAgent-v*.zip

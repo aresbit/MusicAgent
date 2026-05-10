@@ -27,10 +27,6 @@
   "bin": {
     "claude-js": "dist/cli.js"
   },
-  "workspaces": [
-    "packages/*",
-    "packages/@ant/*"
-  ],
   "files": [
     "dist"
   ],

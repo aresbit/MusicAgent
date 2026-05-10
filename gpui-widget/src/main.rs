@@ -14,9 +14,8 @@ use std::time::Duration;
 mod audio;
 mod cli_client;
 mod music_player;
+mod paths;
 mod tts_client;
-
-const APP_FLOW_LOG_FILE: &str = r"D:\yyscode\MusicAgent\gpui-widget\musicagent-flow.log";
 const DEFAULT_TTS_VOICE: &str = "Luna";
 
 fn append_flow_log(line: &str) {
@@ -25,7 +24,7 @@ fn append_flow_log(line: &str) {
     if let Ok(mut f) = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(APP_FLOW_LOG_FILE)
+        .open(crate::paths::log_file("flow"))
     {
         use std::io::Write;
         let _ = f.write_all(msg.as_bytes());

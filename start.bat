@@ -1,9 +1,9 @@
 @echo off
 setlocal
 
-set "ROOT=D:\yyscode\MusicAgent"
-set "BACKEND_DIR=D:\yysdl\KittenTTS-FastAPI"
-set "BACKEND_LOG=%ROOT%\gpui-widget\tts-fastapi.log"
+set "ROOT=%~dp0"
+set "BACKEND_DIR=%~dp0packages\tts-server"
+set "BACKEND_LOG=%~dp0gpui-widget\tts-fastapi.log"
 
 REM Ensure cargo and uv are on PATH for double-click scenarios
 set "PATH=%USERPROFILE%\.cargo\bin;%USERPROFILE%\.local\bin;D:\yysapp\uv;%PATH%"
@@ -12,7 +12,8 @@ set "KITTEN_TTS_DEVICE=cuda"
 REM Force-set a clean model repo ID (trimming any pre-existing trailing spaces)
 set "KITTEN_MODEL_REPO_ID=KittenML/kitten-tts-nano-0.8-fp32"
 REM To use a different model, change the line above or set KITTEN_MODEL_REPO_ID_OVERRIDE
-if not "%KITTEN_MODEL_REPO_ID_OVERRIDE%"=="" set "KITTEN_MODEL_REPO_ID=%KITTEN_MODEL_REPO_ID_OVERRIDE%"`r`nset "KITTEN_MODEL_REPO_ID=%KITTEN_MODEL_REPO_ID: =%"
+if not "%KITTEN_MODEL_REPO_ID_OVERRIDE%"=="" set "KITTEN_MODEL_REPO_ID=%KITTEN_MODEL_REPO_ID_OVERRIDE%"
+set "KITTEN_MODEL_REPO_ID=%KITTEN_MODEL_REPO_ID: =%"
 
 REM Add cuDNN DLL directory to PATH for CUDA TTS acceleration
 set "CUDNN_DIR=%BACKEND_DIR%\.venv\Lib\site-packages\nvidia\cudnn\bin"
@@ -70,7 +71,18 @@ if errorlevel 1 (
 )
 
 echo Backend ready. Launching widget...
-cd /d "%ROOT%\gpui-widget"
-cargo run
+
+REM Try release binary first, then fall back to cargo run (development)
+if exist "%~dp0musicagent-widget.exe" (
+    echo   Using release binary: %~dp0musicagent-widget.exe
+    start "" /B "%~dp0musicagent-widget.exe"
+) else if exist "%~dp0gpui-widget\target\release\musicagent-widget.exe" (
+    echo   Using release binary: %~dp0gpui-widget\target\release\musicagent-widget.exe
+    start "" /B "%~dp0gpui-widget\target\release\musicagent-widget.exe"
+) else (
+    cd /d "%~dp0gpui-widget"
+    echo   Using cargo run (development mode)...
+    cargo run
+)
 
 endlocal

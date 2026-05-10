@@ -3,7 +3,7 @@
 //! 使用 std::process::Command + smol::unblock 调用 opencc CLI 子进程，
 //! 通过 -p/--print 管道模式发送一条消息并获取回复。
 //!
-//! CLI 路径: D:\yyscode\MusicAgent\packages\opencc
+//! CLI 路径: <project_root>/packages/opencc
 //! 调用方式: bun run dist/cli.js -p "message"
 //!
 //! 注意: 不使用 tokio，因为 GPUI 运行在 smol 执行器上。
@@ -68,7 +68,7 @@ pub struct OpenCcConfig {
 impl Default for OpenCcConfig {
     fn default() -> Self {
         Self {
-            project_dir: PathBuf::from(r"D:\yyscode\MusicAgent\packages\opencc"),
+            project_dir: crate::paths::opencc_dir(),
             cli_entry: PathBuf::from(r"dist/cli.js"),
             timeout_secs: 120,
         }
@@ -76,7 +76,7 @@ impl Default for OpenCcConfig {
 }
 
 fn append_cli_log(line: &str) {
-    let log_path = PathBuf::from(r"D:\yyscode\MusicAgent\gpui-widget\musicagent-cli.log");
+    let log_path = crate::paths::log_file("cli");
     let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let full = format!("[{}] {}\n", ts, line);
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log_path) {
