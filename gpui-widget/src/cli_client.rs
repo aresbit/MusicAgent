@@ -15,6 +15,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 // ─── Auto-load env vars from ~/.bashrc ─────────────────────────────────
 
@@ -161,6 +163,8 @@ async fn run_cli_print_mode(message: &str, config: &OpenCcConfig) -> Result<Stri
                 .arg(bat_path.to_str().context("Invalid opencc.bat path")?)
                 .arg("-p")
                 .arg(&message);
+            #[cfg(windows)]
+            { c.creation_flags(0x08000000); }
             c
         } else {
             let mut c = Command::new("bun");

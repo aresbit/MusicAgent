@@ -212,34 +212,94 @@ impl MusicAgentApp {
         cx.spawn(|this: WeakEntity<Self>, _cx: &mut AsyncApp| async move {
             let cx = async_cx;
 
-            // Detect direct play commands in Chinese/English.
+            // Detect direct play/enqueue/skip/replay commands in Chinese/English.
             let raw = question_owned.trim();
             let lowered = raw.to_lowercase();
-            let play_cn = "\u{64AD}\u{653E}"; // 闂傚倷绀佸﹢閬嶆惞鎼淬劌鍌ㄥù鐘差儏濡?
-            let put_cn = "\u{653E}"; // 闂傚倷娴囬妴鈧柛?
-            let query_opt = if let Some(rest) = raw.strip_prefix(play_cn) {
-                Some(rest.trim().to_string())
+            let play_cn = "\u{64AD}\u{653E}"; // 播放
+            let put_cn = "\u{653E}"; // 放
+            let queue_cn = "\u{961F}\u{5217}"; // 队列
+            let enqueue_cn = "\u{6392}\u{961F}"; // 排队
+            let skip_cn = "\u{4E0B}\u{4E00}\u{9996}"; // 下一首
+            let cut_cn = "\u{5207}\u{6B4C}"; // 切歌
+            let replay_cn = "\u{91CD}\u{64AD}"; // 重播
+            let replay2_cn = "\u{91CD}\u{65B0}\u{64AD}\u{653E}"; // 重新播放
+
+            // ── Stop command ──
+            if raw == "\u{505C}\u{6B62}" || raw == "\u{505C}" || lowered == "stop" {
+                audio::stop_music();
+                if let Some(v) = this.upgrade() {
+                    v.update(&mut cx.clone(), |this, cx| {
+                        this.is_asking = false;
+                        this.status = "Stopped".into();
+                        this.is_playing = false;
+                        cx.notify();
+                    }).ok();
+                }
+                return;
+            }
+
+            // ── Skip command ──
+            if raw.contains(skip_cn) || raw.contains(cut_cn) || lowered.contains("skip") || lowered.contains("next ") {
+                music_player::skip();
+                if let Some(v) = this.upgrade() {
+                    v.update(&mut cx.clone(), |this, cx| {
+                        this.is_asking = false;
+                        this.status = "Skipping...".into();
+                        cx.notify();
+                    }).ok();
+                }
+                return;
+            }
+
+            // ── Replay command ──
+            if raw.contains(replay_cn) || raw.contains(replay2_cn) || lowered.contains("replay") {
+                music_player::replay();
+                if let Some(v) = this.upgrade() {
+                    v.update(&mut cx.clone(), |this, cx| {
+                        this.is_asking = false;
+                        this.status = "Replaying...".into();
+                        this.is_playing = true;
+                        cx.notify();
+                    }).ok();
+                }
+                return;
+            }
+
+            // ── Play / Enqueue commands ──
+            let (query_opt, is_enqueue) = if let Some(rest) = raw.strip_prefix(play_cn) {
+                (Some(rest.trim().to_string()), false)
             } else if let Some(rest) = raw.strip_prefix(put_cn) {
-                Some(rest.trim().to_string())
+                (Some(rest.trim().to_string()), false)
+            } else if let Some(rest) = raw.strip_prefix(queue_cn) {
+                (Some(rest.trim().to_string()), true)
+            } else if let Some(rest) = raw.strip_prefix(enqueue_cn) {
+                (Some(rest.trim().to_string()), true)
             } else if let Some(pos) = raw.find(play_cn) {
-                Some(raw[(pos + play_cn.len())..].trim().to_string())
+                (Some(raw[(pos + play_cn.len())..].trim().to_string()), false)
             } else if let Some(pos) = raw.find(put_cn) {
-                Some(raw[(pos + put_cn.len())..].trim().to_string())
+                (Some(raw[(pos + put_cn.len())..].trim().to_string()), false)
             } else if let Some(pos) = lowered.find("play ") {
-                Some(raw[(pos + 5)..].trim().to_string())
+                (Some(raw[(pos + 5)..].trim().to_string()), false)
+            } else if let Some(pos) = lowered.find("queue ") {
+                (Some(raw[(pos + 6)..].trim().to_string()), true)
             } else {
-                None
+                (None, false)
             };
 
             if let Some(query) = query_opt {
                 if !query.is_empty() {
-                    match music_player::search_and_play(&query).await {
+                    let result = if is_enqueue {
+                        music_player::search_and_enqueue(&query).await
+                    } else {
+                        music_player::search_and_play(&query).await
+                    };
+                    match result {
                         Ok(msg) => {
                             if let Some(v) = this.upgrade() {
                                 v.update(&mut cx.clone(), |this, cx| {
                                     this.is_asking = false;
-                                    this.status = "Playing...".into();
-                                    this.is_playing = true;
+                                    this.status = if is_enqueue { "Queued".into() } else { "Playing...".into() };
+                                    this.is_playing = !is_enqueue;
                                     this.turns.push(Turn {
                                         who: "Melody".into(),
                                         time: this.current_time.clone(),
@@ -550,6 +610,7 @@ impl MusicAgentApp {
             .rounded_t(px(34.0))
             .mt(px(-8.0))
             .child(self.render_meta())
+            .child(self.render_queue_list())
             .child(self.render_transcript())
             .child(self.render_input_area(weak.clone()))
             .child(self.render_question_buttons(weak.clone()))
@@ -557,8 +618,59 @@ impl MusicAgentApp {
     }
 
     fn render_meta(&self) -> impl IntoElement {
-        // Meta area reserved for future dynamic content (e.g. now playing)
-        div().h(px(0.0))
+        let queue_len = audio::queue_len();
+        let label = match audio::current_song() {
+            Some(song) => {
+                if queue_len > 0 {
+                    format!("♫ {} (+{} queued)", song.title, queue_len)
+                } else {
+                    format!("♫ {}", song.title)
+                }
+            }
+            None => {
+                if queue_len > 0 {
+                    format!("⏳ {} songs in queue — waiting...", queue_len)
+                } else {
+                    return div().h(px(0.0));
+                }
+            }
+        };
+        div()
+            .h(px(24.0))
+            .flex()
+            .items_center()
+            .px(px(16.0))
+            .text_size(px(11.0))
+            .text_color(gpui::rgb(0x888888))
+            .child(label)
+    }
+
+    fn render_queue_list(&self) -> impl IntoElement {
+        let songs = audio::queue_songs();
+        if songs.is_empty() {
+            return div().h(px(0.0));
+        }
+        let mut list = div()
+            .mx(px(16.0))
+            .mb(px(4.0))
+            .py(px(6.0))
+            .px(px(10.0))
+            .rounded(px(8.0))
+            .bg(gpui::rgb(0xF5F5F7))
+            .flex()
+            .flex_col()
+            .gap(px(2.0));
+        for (i, song) in songs.iter().enumerate() {
+            let prefix = if i == 0 { "▸ " } else { "  " };
+            let label = format!("{}{}", prefix, song.title);
+            list = list.child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(gpui::rgb(0x555555))
+                    .child(label)
+            );
+        }
+        list
     }
 
     fn render_transcript(&self) -> impl IntoElement {
@@ -769,9 +881,8 @@ impl MusicAgentApp {
                     if this.is_playing {
                         audio::stop_music();
                         this.status = "Stopping...".into();
-                    } else {
-                        audio::start_ambient();
                     }
+                    // else: no music playing — do nothing (no ambient hum)
                 }).ok();
             })
     }
