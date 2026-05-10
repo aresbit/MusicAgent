@@ -4,7 +4,6 @@ setlocal enabledelayedexpansion
 set "ROOT=%~dp0"
 set "OPENCC_DIR=%ROOT%packages\opencc"
 set "GPUI_DIR=%ROOT%gpui-widget"
-set "TTS_DIR=%ROOT%packages\tts-server"
 set "RELEASE_DIR=%ROOT%release"
 
 echo ==========================================
@@ -63,7 +62,6 @@ if exist "%RELEASE_DIR%" (
 )
 mkdir "%RELEASE_DIR%"
 mkdir "%RELEASE_DIR%\packages\opencc\dist"
-mkdir "%RELEASE_DIR%\packages\tts-server"
 
 REM Copy Rust binary
 copy "%RELEASE_EXE%" "%RELEASE_DIR%\musicagent-widget.exe" >nul
@@ -84,18 +82,6 @@ copy "%OPENCC_DIR%\package.json" "%RELEASE_DIR%\packages\opencc\package.json" >n
 copy "%OPENCC_DIR%\opencc.bat" "%RELEASE_DIR%\packages\opencc\opencc.bat" >nul
 copy "%OPENCC_DIR%\music-agent-prompt.txt" "%RELEASE_DIR%\packages\opencc\music-agent-prompt.txt" >nul
 echo   - packages/opencc/
-
-REM Copy TTS server (skip __pycache__)
-xcopy /E /I /Q /EXCLUDE:%ROOT%.tts-exclude "%TTS_DIR%" "%RELEASE_DIR%\packages\tts-server\" >nul 2>nul
-xcopy /E /I /Q "%TTS_DIR%\src" "%RELEASE_DIR%\packages\tts-server\src\" >nul
-xcopy /E /I /Q "%TTS_DIR%\charts" "%RELEASE_DIR%\packages\tts-server\charts\" >nul
-xcopy "%TTS_DIR%\*" "%RELEASE_DIR%\packages\tts-server\" >nul
-echo   - packages/tts-server/
-
-REM Clean __pycache__ from release
-if exist "%RELEASE_DIR%\packages\tts-server\src\kittentts\__pycache__" (
-    rmdir /s /q "%RELEASE_DIR%\packages\tts-server\src\kittentts\__pycache__"
-)
 
 REM Create gpui-widget placeholder dir
 mkdir "%RELEASE_DIR%\gpui-widget" >nul 2>nul

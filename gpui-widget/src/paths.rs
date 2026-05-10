@@ -46,11 +46,6 @@ pub fn opencc_dir() -> PathBuf {
     project_root().join("packages").join("opencc")
 }
 
-/// Path to the TTS server directory (`packages/tts-server/`).
-pub fn tts_server_dir() -> PathBuf {
-    project_root().join("packages").join("tts-server")
-}
-
 /// Log file path inside widget_dir.
 pub fn log_file(name: &str) -> PathBuf {
     widget_dir().join(format!("musicagent-{}.log", name))

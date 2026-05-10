@@ -3591,7 +3591,6 @@ dependencies = [
  "chrono",
  "gpui",
  "gpui-component",
- "hound",
  "rodio",
  "serde",
  "serde_json",
