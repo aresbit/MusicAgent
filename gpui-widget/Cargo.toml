@@ -14,5 +14,7 @@ chrono = "0.4"
 tokio = { version = "1", features = ["full"] }
 smol = "2"
 rodio = { version = "0.20", features = ["mp3"] }
+rustfft = "6"
+rand = "0.8"
 ureq = "3"
 walkdir = "2"

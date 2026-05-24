@@ -135,6 +135,82 @@ In the **MCP** tab:
 | `Ctrl+Enter` / `Cmd+Enter` | Send prompt |
 | `Ctrl+Shift+B` | Stop running agent |
 
+## GPUI Music Widget (Rust)
+
+`gpui-widget/` ships a standalone Rust desktop player ("Melody FM") that the AutoAgent stack drives. It uses GPUI for the window, `rodio` for playback, `rustfft` for the dual frequency-spectrum + time-rolling visualisations, and shells out to `yt-dlp` for search & download from YouTube / Bilibili.
+
+### Prerequisites (Linux)
+
+```bash
+# Rust toolchain
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup default stable
+
+# System dev libs (Ubuntu / Debian)
+sudo apt install -y \
+    libxkbcommon-x11-dev libxkbcommon-dev \
+    libasound2-dev libfreetype-dev libfontconfig1-dev \
+    libxcb1-dev pkg-config
+
+# yt-dlp (search & download backend)
+pip install --user yt-dlp
+# or:
+curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ~/.local/bin/yt-dlp && chmod +x ~/.local/bin/yt-dlp
+```
+
+> **Proxy gotcha**: if your shell exports `FTP_PROXY=ftp://...`, yt-dlp will abort with *"Unsupported proxy type: ftp"*. The widget already strips `FTP_PROXY` from the yt-dlp child env, but if you invoke yt-dlp manually `unset FTP_PROXY ftp_proxy` first.
+
+### Build & Run
+
+```bash
+cd gpui-widget
+
+# Debug build (~30s incremental)
+cargo build
+./target/debug/musicagent-widget
+
+# Detached background launch (recommended — keeps the window alive even if the
+# spawning terminal closes)
+nohup ./target/debug/musicagent-widget \
+    > /tmp/musicagent.stdout.log \
+    2> /tmp/musicagent.stderr.log \
+    < /dev/null &
+disown
+
+# Release build (smaller binary, faster startup)
+cargo build --release
+./target/release/musicagent-widget
+```
+
+### Voice / Text Commands
+
+| Input | Action |
+|---|---|
+| `播放 周杰伦 七里香` / `play kind of blue` | Search + play (interrupt current) |
+| `播放 A, B、C; D` | Multi-song: first plays, rest queued |
+| `队列 后来` / `queue late night jazz` | Append to queue without interrupting |
+| `下一首` / `skip` / `next song` | Skip to next queued track |
+| `重播` / `replay` | Replay the most recently finished track |
+| `随机` / `洗牌` / `shuffle` | Shuffle the queue (current track untouched) |
+| `停止` / `stop` | Stop playback and clear queue |
+| Free-form prose (no keyword) | Routed to the opencc CLI for AI response |
+| Click history row | One-click replay from the recent-played panel |
+| Click `▲` / `✕` on queue row | Pin-to-top / remove |
+| Click 🔀 button in player row | Shuffle current queue |
+
+### Cache & Logs
+
+```
+gpui-widget/
+├── music_cache/                 # Downloaded MP3s (hash-named) + optional VTT subtitles
+├── musicagent-flow.log          # UI / ask_question flow
+├── musicagent-cli.log           # opencc CLI subprocess request/response sizes
+├── musicagent-audio.log         # Playback engine (start/finish/interrupt)
+└── musicagent-music.log         # Search & download (incl. yt-dlp stderr first 3 lines)
+```
+
+Clear cache with `rm -rf music_cache/ musicagent-*.log` when debugging.
+
 ## Building from Source
 
 ### Linux / macOS

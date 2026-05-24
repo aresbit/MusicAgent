@@ -27,9 +27,36 @@ fn music_log(line: &str) {
     }
 }
 
-fn force_local_no_proxy() {
-    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
-    std::env::set_var("no_proxy", "127.0.0.1,localhost");
+/// Sanitize the inherited env on a per-Command basis before invoking yt-dlp.
+///
+/// Two concrete problems we've seen in the wild:
+/// 1. `FTP_PROXY=ftp://…` — urllib (used by yt-dlp) does not support the `ftp`
+///    proxy scheme and aborts the whole HTTP request with
+///    "Unsupported proxy type: ftp". We unset it on the child.
+/// 2. `NO_PROXY` historically gets clobbered by this app. Instead of mutating
+///    the *process* env, scope all overrides to the child Command, so the rest
+///    of the app keeps the user's original settings.
+fn sanitize_proxy_env(cmd: &mut Command) {
+    for k in ["FTP_PROXY", "ftp_proxy", "ALL_PROXY_FTP", "all_proxy_ftp"] {
+        cmd.env_remove(k);
+    }
+    // Make sure local addrs bypass any proxy we *do* honour.
+    let no_proxy = std::env::var("NO_PROXY")
+        .or_else(|_| std::env::var("no_proxy"))
+        .unwrap_or_default();
+    let mut parts: Vec<String> = no_proxy
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    for needed in ["127.0.0.1", "localhost"] {
+        if !parts.iter().any(|p| p == needed) {
+            parts.push(needed.to_string());
+        }
+    }
+    let merged = parts.join(",");
+    cmd.env("NO_PROXY", &merged);
+    cmd.env("no_proxy", &merged);
 }
 
 // ─── Search Results ────────────────────────────────────────────────────────
@@ -49,10 +76,11 @@ pub struct SearchResult {
 async fn search_youtube(query: &str) -> Result<Vec<SearchResult>> {
     let query = query.to_string();
     smol::unblock(move || -> Result<Vec<SearchResult>> {
-        force_local_no_proxy();
         music_log(&format!("yt search start query='{}'", query));
 
-        let output = Command::new("yt-dlp")
+        let mut cmd = Command::new("yt-dlp");
+        sanitize_proxy_env(&mut cmd);
+        let output = cmd
             .args([
                 "--flat-playlist",
                 "--dump-single-json",
@@ -66,6 +94,12 @@ async fn search_youtube(query: &str) -> Result<Vec<SearchResult>> {
             .output()
             .context("yt-dlp not found — install with: pip install yt-dlp")?;
 
+        if !output.stderr.is_empty() {
+            let s = String::from_utf8_lossy(&output.stderr);
+            for line in s.lines().take(3) {
+                music_log(&format!("yt stderr: {}", line));
+            }
+        }
         let results = parse_ytdlp_json(&output.stdout, "youtube")?;
         music_log(&format!("yt search found {} results", results.len()));
         Ok(results)
@@ -81,10 +115,11 @@ async fn search_youtube(query: &str) -> Result<Vec<SearchResult>> {
 async fn search_bilibili(query: &str) -> Result<Vec<SearchResult>> {
     let query = query.to_string();
     smol::unblock(move || -> Result<Vec<SearchResult>> {
-        force_local_no_proxy();
         music_log(&format!("bili search start query='{}'", query));
 
-        let output = Command::new("yt-dlp")
+        let mut cmd = Command::new("yt-dlp");
+        sanitize_proxy_env(&mut cmd);
+        let output = cmd
             .args([
                 "--flat-playlist",
                 "--dump-single-json",
@@ -98,6 +133,12 @@ async fn search_bilibili(query: &str) -> Result<Vec<SearchResult>> {
             .output()
             .context("yt-dlp not found — install with: pip install yt-dlp")?;
 
+        if !output.stderr.is_empty() {
+            let s = String::from_utf8_lossy(&output.stderr);
+            for line in s.lines().take(3) {
+                music_log(&format!("bili stderr: {}", line));
+            }
+        }
         let results = parse_ytdlp_json(&output.stdout, "bilibili")?;
         music_log(&format!("bili search found {} results", results.len()));
         Ok(results)
@@ -175,13 +216,22 @@ pub async fn search_music(query: &str) -> Result<Vec<SearchResult>> {
 
 // ─── Download ──────────────────────────────────────────────────────────────
 
-/// 下载音频到本地缓存，返回 MP3 文件路径
-pub async fn download_audio(url: &str, cache_dir: &Path) -> Result<PathBuf> {
+/// Audio file + (best-effort) lyrics VTT path.
+#[derive(Debug, Clone)]
+pub struct DownloadResult {
+    pub audio_path: PathBuf,
+    pub lyrics_path: Option<PathBuf>,
+}
+
+/// 下载音频到本地缓存，返回 MP3 文件路径以及（如有）VTT 字幕路径。
+///
+/// 字幕走 yt-dlp `--write-subs --write-auto-subs --convert-subs vtt`，
+/// 失败不会让整个下载失败（lyrics 是可选）。
+pub async fn download_audio(url: &str, cache_dir: &Path) -> Result<DownloadResult> {
     let url = url.to_string();
     let cache_dir = cache_dir.to_path_buf();
 
-    smol::unblock(move || -> Result<PathBuf> {
-        force_local_no_proxy();
+    smol::unblock(move || -> Result<DownloadResult> {
         std::fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
 
         // deterministic hash-based filename
@@ -193,40 +243,55 @@ pub async fn download_audio(url: &str, cache_dir: &Path) -> Result<PathBuf> {
         let output_template = cache_dir.join(format!("{}.%(ext)s", hash));
         let output_path = cache_dir.join(format!("{}.mp3", hash));
 
-        if output_path.exists() {
+        let audio_path = if output_path.exists() {
             music_log(&format!("download cache hit path={}", output_path.display()));
-            return Ok(output_path);
+            output_path.clone()
+        } else {
+            music_log(&format!("download start url='{}'", url));
+
+            let mut cmd = Command::new("yt-dlp");
+            sanitize_proxy_env(&mut cmd);
+            let status = cmd
+                .args([
+                    "--extractor-args",
+                    "youtube:player_client=android",
+                    "--extract-audio",
+                    "--audio-format",
+                    "mp3",
+                    "--audio-quality",
+                    "0",
+                    // Best-effort subtitle / auto-caption download.
+                    "--write-subs",
+                    "--write-auto-subs",
+                    "--sub-langs",
+                    "zh-Hans,zh-CN,zh,en,en-US,ja",
+                    "--convert-subs",
+                    "vtt",
+                    "--no-warnings",
+                    "-o",
+                    output_template.to_str().unwrap(),
+                    &url,
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .status()
+                .context("Failed to run yt-dlp download")?;
+
+            if !status.success() {
+                anyhow::bail!("yt-dlp download failed with exit code: {:?}", status.code());
+            }
+
+            // yt-dlp may produce .mp3 or other extension — find the real file
+            let actual = find_audio_file(&cache_dir, hash).unwrap_or(output_path);
+            music_log(&format!("download done path={}", actual.display()));
+            actual
+        };
+
+        let lyrics_path = find_lyrics_file(&cache_dir, hash);
+        if let Some(ref p) = lyrics_path {
+            music_log(&format!("lyrics vtt={}", p.display()));
         }
-
-        music_log(&format!("download start url='{}'", url));
-
-        let status = Command::new("yt-dlp")
-            .args([
-                "--extractor-args",
-                "youtube:player_client=android",
-                "--extract-audio",
-                "--audio-format",
-                "mp3",
-                "--audio-quality",
-                "0",
-                "--no-warnings",
-                "-o",
-                output_template.to_str().unwrap(),
-                &url,
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .status()
-            .context("Failed to run yt-dlp download")?;
-
-        if !status.success() {
-            anyhow::bail!("yt-dlp download failed with exit code: {:?}", status.code());
-        }
-
-        // yt-dlp may produce .mp3 or other extension — find the real file
-        let actual = find_audio_file(&cache_dir, hash).unwrap_or(output_path);
-        music_log(&format!("download done path={}", actual.display()));
-        Ok(actual)
+        Ok(DownloadResult { audio_path, lyrics_path })
     })
     .await
 }
@@ -243,6 +308,31 @@ fn find_audio_file(dir: &Path, hash: u64) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Find a VTT subtitle file `{hash}.<lang>.vtt`, preferring zh* then en* then any.
+fn find_lyrics_file(dir: &Path, hash: u64) -> Option<PathBuf> {
+    let prefix = format!("{}.", hash);
+    let mut zh: Option<PathBuf> = None;
+    let mut en: Option<PathBuf> = None;
+    let mut other: Option<PathBuf> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy().to_string();
+        if !(name_str.starts_with(&prefix) && name_str.ends_with(".vtt")) {
+            continue;
+        }
+        let lang_part = &name_str[prefix.len()..name_str.len() - 4]; // strip ".vtt"
+        let lower = lang_part.to_ascii_lowercase();
+        if lower.starts_with("zh") {
+            zh = Some(entry.path());
+        } else if lower.starts_with("en") {
+            en.get_or_insert(entry.path());
+        } else {
+            other.get_or_insert(entry.path());
+        }
+    }
+    zh.or(en).or(other)
 }
 
 // ─── High-level actions ────────────────────────────────────────────────────
@@ -262,9 +352,10 @@ pub async fn search_and_play(query: &str) -> Result<String> {
     ));
 
     let cache_dir = crate::paths::music_cache_dir();
-    let file_path = download_audio(&first.url, &cache_dir).await?;
+    let dl = download_audio(&first.url, &cache_dir).await?;
 
-    let song = SongEntry::new(&first.title, &first.url, file_path);
+    let song = SongEntry::new(&first.title, &first.url, dl.audio_path)
+        .with_lyrics(dl.lyrics_path);
     crate::audio::play_music(song);
 
     Ok(format!("\u{1F3B5} Now playing: {}", first.title))
@@ -280,9 +371,10 @@ pub async fn search_and_enqueue(query: &str) -> Result<String> {
     let first = &results[0];
 
     let cache_dir = crate::paths::music_cache_dir();
-    let file_path = download_audio(&first.url, &cache_dir).await?;
+    let dl = download_audio(&first.url, &cache_dir).await?;
 
-    let song = SongEntry::new(&first.title, &first.url, file_path);
+    let song = SongEntry::new(&first.title, &first.url, dl.audio_path)
+        .with_lyrics(dl.lyrics_path);
     crate::audio::enqueue(song);
 
     Ok(format!("\u{1F3B5} Added to queue: {} ({} in queue)", first.title, crate::audio::queue_len()))
